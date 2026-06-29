@@ -1,0 +1,335 @@
+---
+title: "Noise-and-Reshuffle REM Estimation Across MR Levels (v02)"
+author: "Gabriel"
+date: "2026-06-03"
+format:
+  html:
+    theme: darkly
+    toc: true
+    code-fold: false
+    embed-resources: true
+---
+
+## 1) Setup
+
+```{r}
+#| label: setup
+#| message: false
+
+library(remify)
+library(remstats)
+library(remstimate)
+
+project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+data_dir   <- file.path(project_root, "code", "data", "synthetic")
+mr_dir     <- file.path(data_dir, "mr_levels_v02")
+output_dir <- file.path(data_dir, "rem_noise_estimates")
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+output_csv <- file.path(output_dir, "rem_noise_estimates_v02.csv")
+log_csv    <- file.path(output_dir, "rem_noise_run_log_v02.csv")
+```
+
+## 2) Configuration
+
+```{r}
+#| label: config
+
+R_REPLICATES  <- 5    # repeat each MR level a few times as a robustness check
+MR_LEVELS_PCT <- c(0, 2, 8, 16, 24)
+EPS_FACTOR    <- 0.10  # noise size = 0.1 * smallest gap between event times
+MASTER_SEED   <- 20260521
+N_ACTORS      <- 20
+
+# the values used by the simulator (what we hope to recover)
+TRUE_PARAMS <- c(
+  baseline = -5.00,
+  inertia = 0.02,
+  reciprocity = 0.10,
+  otp = 0.03,
+  difference_active = 0.15,
+  same_group = 0.40
+)
+```
+
+## 3) Load baseline and MR-level data
+
+Every MR level is derived from the same 0% baseline
+(see `baseline_and_mr_generation_v02.qmd`). For the 0% level we build a matching
+long table here so the fitting code can treat all levels the same way.
+
+```{r}
+#| label: load-data
+
+actor_attrs <- read.csv(file.path(data_dir, "reh_baseline_0mr_actor_attributes.csv"))
+
+reh_0mr <- read.csv(file.path(data_dir, "reh_baseline_0mr_20actors_2000events.csv"))
+reh_0mr_long <- data.frame(
+  event_id = reh_0mr$event_id,
+  sender   = reh_0mr$sender,
+  receiver = reh_0mr$receiver,
+  time     = reh_0mr$time,
+  mr_size  = 1L
+)
+
+mr_long_data <- list("0" = reh_0mr_long)
+for (pct in MR_LEVELS_PCT[MR_LEVELS_PCT > 0]) {
+  tag <- sprintf("mr%02d", pct)
+  mr_long_data[[as.character(pct)]] <- read.csv(
+    file.path(mr_dir, paste0("reh_", tag, "_from_baseline_long.csv"))
+  )
+}
+
+load_summary <- data.frame()
+for (pct in MR_LEVELS_PCT) {
+  df <- mr_long_data[[as.character(pct)]]
+  load_summary <- rbind(load_summary, data.frame(
+    mr_level_pct         = pct,
+    rows                 = nrow(df),
+    unique_events        = length(unique(df$event_id)),
+    duplicate_timestamps = sum(duplicated(df$time))
+  ))
+}
+
+load_summary
+```
+
+## 4) Helper functions
+
+### 4a) Noise injection
+
+A tie-oriented REM needs a strict event order, but multi-receiver events all
+share the same timestamp. `inject_noise()` deals with this by adding a tiny
+random amount of time to every row that shares its timestamp with another row
+(all MR rows, plus the occasional tied baseline event).
+
+The noise is drawn from `Uniform(0, eps_max)`, where `eps_max` is `eps_factor`
+times the smallest gap between distinct event times. Keeping the noise smaller
+than the smallest real gap means a perturbed event can never jump past a
+neighbouring event, so the order of the distinct timestamps is preserved.
+
+```{r}
+#| label: inject-noise
+
+inject_noise <- function(long_df, eps_factor, seed) {
+
+  # which rows share their timestamp with at least one other row?
+  shared_time <- duplicated(long_df$time) | duplicated(long_df$time, fromLast = TRUE)
+  needs_noise <- (long_df$mr_size > 1) | shared_time
+
+  # biggest noise we allow: a fraction of the smallest gap between event times
+  unique_times <- sort(unique(long_df$time))
+  if (length(unique_times) < 2) {
+    eps_max <- 0
+  } else {
+    eps_max <- min(diff(unique_times)) * eps_factor
+  }
+
+  # add noise only to the rows that need it
+  set.seed(seed)
+  noise <- numeric(nrow(long_df))
+  if (eps_max > 0) {
+    noise[needs_noise] <- runif(sum(needs_noise), min = 0, max = eps_max)
+  }
+
+  long_df$noise_added <- noise
+  long_df$time_noisy  <- long_df$time + noise
+  long_df <- long_df[order(long_df$time_noisy, long_df$event_id), ]
+
+  # the noisy times should now all be distinct
+  stopifnot(!anyDuplicated(long_df$time_noisy))
+
+  list(
+    df        = long_df,
+    eps_max   = eps_max,
+    n_mr_rows = sum(long_df$mr_size > 1),
+    n_noised  = sum(needs_noise)
+  )
+}
+```
+
+### 4b) REM fitter
+
+Same effects formula and MLE estimator as `rem_parameter_recovery_v01.qmd`.
+It takes the noisy long-format edgelist and returns the coefficients, their
+standard errors, and how long the fit took.
+
+```{r}
+#| label: rem-fitter
+
+REM_EFFECTS <- ~ 1 +
+  inertia() +
+  reciprocity() +
+  otp() +
+  difference(variable = "active") +
+  same(variable = "group")
+
+actor_attrs_rs <- data.frame(
+  name   = as.character(actor_attrs$id),
+  time   = actor_attrs$time,
+  group  = actor_attrs$group,
+  active = actor_attrs$active
+)
+
+fit_rem_on_long <- function(long_df, actors, effects, attrs_rs) {
+
+  edgelist <- data.frame(
+    time     = long_df$time_noisy,
+    actor1   = long_df$sender,
+    actor2   = long_df$receiver
+  )
+
+  t_start <- Sys.time()
+
+  reh <- remify::remify(
+    edgelist = edgelist,
+    directed = TRUE,
+    ordinal  = FALSE,
+    model    = "tie",
+    actors   = actors
+  )
+
+  stats <- remstats::remstats(
+    reh         = reh,
+    tie_effects = effects,
+    attr_actors = attrs_rs
+  )
+
+  fit <- remstimate::remstimate(
+    reh    = reh,
+    stats  = stats,
+    method = "MLE"
+  )
+
+  t_end <- Sys.time()
+
+  list(
+    estimate    = coef(fit),
+    se          = sqrt(diag(vcov(fit))),
+    elapsed_sec = as.numeric(difftime(t_end, t_start, units = "secs"))
+  )
+}
+```
+
+### 4c) One-replicate driver
+
+```{r}
+#| label: one-replicate
+
+run_one_replicate <- function(long_df, mr_pct, replicate_id,
+                              eps_factor, master_seed,
+                              actors, effects, attrs_rs) {
+
+  seed <- as.integer(master_seed + mr_pct * 1000L + replicate_id)
+  injected <- inject_noise(long_df, eps_factor = eps_factor, seed = seed)
+  fit_out  <- fit_rem_on_long(
+    long_df  = injected$df,
+    actors   = actors,
+    effects  = effects,
+    attrs_rs = attrs_rs
+  )
+
+  data.frame(
+    mr_level_pct = mr_pct,
+    replicate    = replicate_id,
+    seed         = seed,
+    eps_factor   = eps_factor,
+    eps_max      = injected$eps_max,
+    n_mr_rows    = injected$n_mr_rows,
+    n_noised     = injected$n_noised,
+    n_rows       = nrow(injected$df),
+    statistic    = names(fit_out$estimate),
+    estimate     = as.numeric(fit_out$estimate),
+    se           = as.numeric(fit_out$se),
+    elapsed_sec  = fit_out$elapsed_sec,
+    row.names    = NULL,
+    stringsAsFactors = FALSE
+  )
+}
+```
+
+## 5) Main loop — every MR level × R replicates
+
+This fits one REM per (MR level, replicate) and writes the results to a
+long-format CSV.
+
+```{r}
+#| label: main-loop
+
+rem_results <- data.frame()
+run_log     <- data.frame()
+
+for (pct in MR_LEVELS_PCT) {
+  long_df <- mr_long_data[[as.character(pct)]]
+
+  for (r in 1:R_REPLICATES) {
+    one <- run_one_replicate(
+      long_df      = long_df,
+      mr_pct       = pct,
+      replicate_id = r,
+      eps_factor   = EPS_FACTOR,
+      master_seed  = MASTER_SEED,
+      actors       = 1:N_ACTORS,
+      effects      = REM_EFFECTS,
+      attrs_rs     = actor_attrs_rs
+    )
+    rem_results <- rbind(rem_results, one)
+
+    # one log row per replicate (all rows of `one` share these values)
+    run_log <- rbind(run_log, data.frame(
+      mr_level_pct = pct,
+      replicate    = r,
+      seed         = one$seed[1],
+      eps_max      = one$eps_max[1],
+      elapsed_sec  = one$elapsed_sec[1]
+    ))
+  }
+}
+
+write.csv(rem_results, output_csv, row.names = FALSE)
+write.csv(run_log,     log_csv,    row.names = FALSE)
+
+loop_msg <- paste0(
+  "Ran ", R_REPLICATES * length(MR_LEVELS_PCT),
+  " REM fits and saved results to ", basename(output_csv), "."
+)
+```
+
+`r loop_msg`
+
+## 6) Summary across MR levels
+
+For each MR level we average the estimates over the replicates and compare the
+mean to the true value. The 0% level is the noise-free baseline, so its
+estimates should match `rem_parameter_recovery_v01.qmd`.
+
+```{r}
+#| label: cell-summary
+
+# average each statistic across replicates, separately for every MR level
+combos <- unique(rem_results[, c("mr_level_pct", "statistic")])
+
+agg <- data.frame()
+for (i in 1:nrow(combos)) {
+  pct  <- combos$mr_level_pct[i]
+  stat <- combos$statistic[i]
+  vals <- rem_results$estimate[rem_results$mr_level_pct == pct &
+                                 rem_results$statistic == stat]
+  agg <- rbind(agg, data.frame(
+    mr_level_pct  = pct,
+    statistic     = stat,
+    mean_estimate = mean(vals),
+    sd_estimate   = sd(vals),
+    n_replicates  = length(vals)
+  ))
+}
+
+# attach the true value and the bias (mean estimate - truth)
+agg$true_value <- TRUE_PARAMS[agg$statistic]
+agg$bias <- agg$mean_estimate - agg$true_value
+
+agg <- agg[order(agg$mr_level_pct, agg$statistic), ]
+write.csv(agg, file.path(output_dir, "rem_noise_cell_summary_v02.csv"),
+          row.names = FALSE)
+agg
+```

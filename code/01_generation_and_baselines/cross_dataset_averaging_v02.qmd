@@ -1,0 +1,345 @@
+---
+title: "Cross-dataset averaging (v02)"
+author: "Gabriel"
+date: "2026-06-11"
+format:
+  html:
+    theme: flatly
+    toc: true
+    code-fold: false
+    embed-resources: true
+---
+
+Reads `rem_coefs_by_seed.csv` and `rhem_coefs_by_seed.csv` from the batch script.
+Band = `BAND_K * SD(REM estimate at MR = 0)` per statistic.
+
+## Setup
+
+```{r}
+#| label: setup
+#| message: false
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+cd_dir <- file.path(project_root, "code", "data", "synthetic", "cross_dataset")
+
+rem_csv  <- file.path(cd_dir, "rem_coefs_by_seed.csv")
+rhem_csv <- file.path(cd_dir, "rhem_coefs_by_seed.csv")
+
+stopifnot(file.exists(rem_csv), file.exists(rhem_csv))
+
+# true generating values and the order we want the statistics shown in
+TRUE_PARAMS <- c(
+  inertia = 0.02, reciprocity = 0.10, otp = 0.03,
+  difference_active = 0.15, same_group = 0.40
+)
+STAT_ORDER <- names(TRUE_PARAMS)
+
+BAND_K     <- 2                   # band = 2 * SD of the REM estimate at MR = 0
+RULE_GRID  <- c(0, 2, 8, 16, 24)  # the MR levels we actually simulated
+RHEM_SCALE <- "raw"               # compare REM and RHEM on the untransformed scale
+```
+
+## Load
+
+```{r}
+#| label: load
+
+rem  <- read.csv(rem_csv,  stringsAsFactors = FALSE)
+rhem <- read.csv(rhem_csv, stringsAsFactors = FALSE)
+
+n_seeds_rem  <- length(unique(rem$seed))
+n_seeds_rhem <- length(unique(rhem$seed))
+
+data.frame(
+  model   = c("REM", "RHEM"),
+  n_seeds = c(n_seeds_rem, n_seeds_rhem),
+  n_rows  = c(nrow(rem), nrow(rhem))
+)
+```
+
+## Per-effect band (MR = 0)
+
+```{r}
+#| label: band-derive
+
+band_tbl <- rem |>
+  filter(mr_level_pct == 0, statistic %in% STAT_ORDER) |>
+  group_by(statistic) |>
+  summarise(sd_at_mr0 = sd(estimate), .groups = "drop") |>
+  mutate(
+    true_value = TRUE_PARAMS[statistic],
+    band = BAND_K * sd_at_mr0
+  ) |>
+  arrange(factor(statistic, levels = STAT_ORDER))
+
+knitr::kable(band_tbl, digits = 4)
+
+BAND <- setNames(band_tbl$band, band_tbl$statistic)
+```
+
+## Cross-seed averages
+
+```{r}
+#| label: rem-average
+
+rem_avg <- rem |>
+  filter(statistic %in% STAT_ORDER) |>
+  group_by(mr_level_pct, statistic) |>
+  summarise(
+    n_seeds       = n(),
+    mean_estimate = mean(estimate),
+    sd_estimate   = sd(estimate),
+    mc_se         = sd(estimate) / sqrt(n()),
+    .groups = "drop"
+  ) |>
+  mutate(
+    true_value  = TRUE_PARAMS[statistic],
+    mean_bias   = mean_estimate - true_value,
+    band        = BAND[statistic],
+    within_band = abs(mean_bias) <= band,
+    model       = "REM"
+  )
+
+knitr::kable(
+  rem_avg |> arrange(mr_level_pct, factor(statistic, levels = STAT_ORDER)),
+  digits = 4
+)
+```
+
+```{r}
+#| label: rhem-average
+
+rhem_avg <- rhem |>
+  filter(scale == RHEM_SCALE, effect %in% STAT_ORDER) |>
+  group_by(mr_level_pct, effect) |>
+  summarise(
+    n_seeds       = n(),
+    mean_estimate = mean(estimate_aligned),
+    sd_estimate   = sd(estimate_aligned),
+    mc_se         = sd(estimate_aligned) / sqrt(n()),
+    .groups = "drop"
+  ) |>
+  rename(statistic = effect) |>
+  mutate(
+    true_value  = TRUE_PARAMS[statistic],
+    mean_bias   = mean_estimate - true_value,
+    band        = BAND[statistic],
+    within_band = abs(mean_bias) <= band,
+    model       = "RHEM"
+  )
+
+knitr::kable(
+  rhem_avg |> arrange(mr_level_pct, factor(statistic, levels = STAT_ORDER)),
+  digits = 4
+)
+```
+
+## Bias vs MR (REM and RHEM)
+
+```{r}
+#| label: threshold-plot
+#| fig-width: 10
+#| fig-height: 6
+
+combined <- bind_rows(
+  rem_avg  |> select(model, mr_level_pct, statistic, mean_bias, mc_se, band),
+  rhem_avg |> select(model, mr_level_pct, statistic, mean_bias, mc_se, band)
+) |>
+  mutate(statistic = factor(statistic, levels = STAT_ORDER))
+
+band_rects <- combined |> distinct(statistic, band)
+
+ggplot(combined, aes(x = mr_level_pct, y = mean_bias, colour = model)) +
+  geom_rect(
+    data = band_rects,
+    aes(xmin = -Inf, xmax = Inf, ymin = -band, ymax = band),
+    inherit.aes = FALSE, fill = "grey70", alpha = 0.15
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_line() +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_bias - 2 * mc_se, ymax = mean_bias + 2 * mc_se), width = 0.8) +
+  facet_wrap(~ statistic, scales = "free_y", nrow = 2) +
+  scale_colour_manual(values = c(REM = "#1f77b4", RHEM = "#d62728")) +
+  labs(
+    x = "MR level (%)",
+    y = "Mean bias (estimate - truth)",
+    colour = "Model"
+  ) +
+  theme_minimal(base_size = 11)
+```
+
+## Normalised view: |bias| / band (REM only)
+
+```{r}
+#| label: normalised-threshold-plot
+#| fig-width: 10
+#| fig-height: 6
+
+norm_rem <- rem_avg |>
+  mutate(
+    bias_ratio    = abs(mean_bias) / band,
+    bias_ratio_lo = pmax(0, (abs(mean_bias) - 2 * mc_se) / band),
+    bias_ratio_hi = (abs(mean_bias) + 2 * mc_se) / band,
+    statistic     = factor(statistic, levels = STAT_ORDER),
+    on_rule_grid  = mr_level_pct %in% RULE_GRID
+  )
+
+threshold_mark <- norm_rem |>
+  filter(on_rule_grid) |>
+  group_by(mr_level_pct) |>
+  summarise(all_within = all(bias_ratio <= 1), .groups = "drop") |>
+  filter(all_within) |>
+  pull(mr_level_pct) |>
+  max()
+
+stat_col <- c(
+  inertia           = "#0072B2",
+  reciprocity       = "#E69F00",
+  otp               = "#009E73",
+  difference_active = "#D55E00",
+  same_group        = "#CC79A7"
+)
+
+# Saturated, high-contrast palette for poster / projection
+stat_col_poster <- c(
+  inertia           = "#009ABF",  # cyan (distinct from purple / green)
+  reciprocity       = "#C45C00",  # dark orange
+  otp               = "#007A33",  # strong green
+  difference_active = "#B50000",  # strong red
+  same_group        = "#D4008F"   # magenta (distinct from blue / cyan)
+)
+
+make_norm_plot <- function(base_size, line_w, point_s, err_w, err_x, ref_w,
+                           colours = stat_col, poster = FALSE) {
+  ref_colour <- if (poster) "grey15" else "grey40"
+  fail_alpha <- if (poster) 0.18 else 0.10
+
+  p <- ggplot(norm_rem, aes(x = mr_level_pct, y = bias_ratio,
+                            colour = statistic, group = statistic)) +
+    annotate("rect", xmin = -Inf, xmax = Inf, ymin = 1, ymax = Inf,
+             fill = "#d62728", alpha = fail_alpha) +
+    geom_hline(yintercept = 1, linetype = "dashed", colour = ref_colour,
+               linewidth = ref_w) +
+    geom_vline(xintercept = threshold_mark, linetype = "dotted",
+               colour = ref_colour, linewidth = ref_w) +
+    geom_errorbar(aes(ymin = bias_ratio_lo, ymax = bias_ratio_hi),
+                  width = err_x, linewidth = err_w, alpha = if (poster) 0.85 else 0.7) +
+    geom_line(linewidth = line_w) +
+    geom_point(size = point_s, stroke = if (poster) 0.6 else 0) +
+    scale_colour_manual(values = colours, drop = FALSE) +
+    scale_x_continuous(breaks = sort(unique(norm_rem$mr_level_pct))) +
+    labs(
+      x = "Multi-receiver proportion (%)",
+      y = expression("|bias| / band" ~ (1.0 ~ "= band edge")),
+      colour = "Statistic"
+    ) +
+    theme_classic(base_size = base_size) +
+    theme(
+      legend.position = if (poster) "right" else "top",
+      legend.key.width  = unit(if (poster) 1.8 else 1.6, "lines"),
+      legend.key.height = unit(if (poster) 1.2 else 0.8, "lines"),
+      axis.line = element_line(linewidth = ref_w * 0.7, colour = "black"),
+      axis.ticks = element_line(colour = "black", linewidth = ref_w * 0.5),
+      axis.text = element_text(colour = "black"),
+      axis.title = element_text(colour = "black", face = "bold"),
+      legend.title = element_text(face = "bold"),
+      plot.margin = if (poster) margin(12, 18, 12, 12) else margin(10, 14, 10, 14)
+    )
+
+  if (poster) {
+    p <- p + theme(
+      axis.title.x = element_text(size = 26, margin = margin(t = 10)),
+      axis.title.y = element_text(size = 26, margin = margin(r = 10)),
+      axis.text.x  = element_text(size = 22),
+      axis.text.y  = element_text(size = 22),
+      legend.title = element_text(size = 24),
+      legend.text  = element_text(size = 22),
+      legend.spacing.y = unit(0.35, "cm"),
+      legend.box.margin = margin(0, 0, 0, 12)
+    )
+  }
+
+  p
+}
+
+p_norm <- make_norm_plot(
+  base_size = 11, line_w = 0.7, point_s = 2,
+  err_w = 0.4, err_x = 0.8, ref_w = 0.5
+)
+
+p_norm_poster <- make_norm_plot(
+  base_size = 22, line_w = 2.0, point_s = 6,
+  err_w = 1.1, err_x = 1.4, ref_w = 1.0,
+  colours = stat_col_poster, poster = TRUE
+)
+
+p_norm
+
+fig_dir <- file.path(project_root, "code", "thesis", "03_evaluation_and_reporting", "figures")
+poster_fig_dir <- file.path(project_root, "drafts", "03_results", "figures")
+dir.create(fig_dir, showWarnings = FALSE)
+dir.create(poster_fig_dir, showWarnings = FALSE)
+
+ggsave(
+  file.path(fig_dir, "cross_dataset_normalised_threshold_v02.png"),
+  p_norm, width = 10, height = 6, dpi = 300
+)
+ggsave(
+  file.path(poster_fig_dir, "cross_dataset_normalised_threshold_v02.png"),
+  p_norm_poster, width = 20, height = 6, dpi = 600
+)
+ggsave(
+  file.path(poster_fig_dir, "cross_dataset_normalised_threshold_poster.png"),
+  p_norm_poster, width = 20, height = 6, dpi = 600
+)
+```
+
+## Threshold table
+
+Largest MR on `RULE_GRID` where every REM statistic is within band.
+
+```{r}
+#| label: threshold-calc
+
+rem_pass <- rem_avg |>
+  mutate(bias_to_band = abs(mean_bias) / band) |>
+  group_by(mr_level_pct) |>
+  summarise(
+    all_within  = all(abs(mean_bias) <= band),
+    worst_stat  = statistic[which.max(bias_to_band)],
+    worst_ratio = max(bias_to_band),
+    .groups = "drop"
+  ) |>
+  mutate(on_rule_grid = mr_level_pct %in% RULE_GRID) |>
+  arrange(mr_level_pct)
+
+knitr::kable(rem_pass, digits = 4)
+
+rule_pass <- rem_pass |> filter(on_rule_grid)
+threshold <- rule_pass |> filter(all_within) |> pull(mr_level_pct) |> max(na.rm = TRUE)
+if (!is.finite(threshold)) threshold <- NA
+
+threshold
+```
+
+## Save summary CSV
+
+```{r}
+#| label: save
+
+summary_all <- bind_rows(
+  rem_avg |> mutate(model = "REM",  bias_ratio = abs(mean_bias) / band,
+                    on_rule_grid = mr_level_pct %in% RULE_GRID, rhem_scale = NA),
+  rhem_avg |> mutate(model = "RHEM", bias_ratio = abs(mean_bias) / band,
+                     on_rule_grid = mr_level_pct %in% RULE_GRID, rhem_scale = RHEM_SCALE)
+)
+
+out_csv <- file.path(cd_dir, "cross_dataset_summary_v02.csv")
+write.csv(summary_all, out_csv, row.names = FALSE)
+out_csv
+```

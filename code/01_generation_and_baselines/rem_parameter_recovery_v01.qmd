@@ -1,0 +1,180 @@
+---
+title: "REM Parameter Recovery on 0% MR Baseline (v01)"
+author: "Gabriel"
+date: "2026-04-30"
+format:
+  html:
+    theme: darkly
+    toc: true
+    code-fold: false
+    embed-resources: true
+---
+
+## Purpose
+
+This notebook validates the REM estimation pipeline by fitting a tie-oriented
+REM to the clean **0% MR baseline** and checking whether the estimated
+parameters recover the known generating values.
+
+This is the gating step before any multi-receiver experiments (Decision #8 in
+`THESIS_TRACKER.md`): if the pipeline cannot recover the truth from clean
+dyadic data, downstream comparisons are not trustworthy.
+
+**True generating parameters** (from `baseline_and_mr_generation_v02.qmd`):
+
+| Statistic          | Type       | True value |
+|--------------------|------------|-----------|
+| baseline           | —          | -5.00     |
+| inertia            | endogenous | 0.02      |
+| reciprocity        | endogenous | 0.10      |
+| otp                | endogenous | 0.03      |
+| difference (active)| exogenous  | 0.15      |
+| same (group)       | exogenous  | 0.40      |
+
+## 1) Setup
+
+```{r}
+#| label: setup
+#| message: false
+
+library(remify)
+library(remstats)
+library(remstimate)
+
+# project_root points to the repo root (three folders up from this notebook)
+project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+```
+
+## 2) Load baseline data
+
+```{r}
+#| label: load-data
+
+data_dir <- file.path(project_root, "code", "data", "synthetic")
+
+reh_raw <- read.csv(file.path(data_dir, "reh_baseline_0mr_20actors_2000events.csv"))
+actor_attrs <- read.csv(file.path(data_dir, "reh_baseline_0mr_actor_attributes.csv"))
+```
+
+Loaded `r nrow(reh_raw)` events on `r nrow(actor_attrs)` actors. Columns:
+`r paste(names(reh_raw), collapse = ", ")`.
+
+```{r}
+#| label: load-data-preview
+head(reh_raw)
+head(actor_attrs)
+```
+
+## 3) Process with remify
+
+`remify::remify()` expects the first three columns of the edgelist to be
+`[time, actor1, actor2]` in that order. Our CSV already has
+`time, sender, receiver` as the first three — column names do not matter,
+only position.
+
+```{r}
+#| label: remify
+
+edgelist <- reh_raw[, c("time", "sender", "receiver")]
+
+reh <- remify::remify(
+  edgelist = edgelist,
+  directed = TRUE,
+  ordinal  = FALSE,
+  model    = "tie",
+  actors   = 1:20
+)
+```
+
+## 4) Compute statistics with remstats
+
+The formula mirrors the generating specification but **without coefficient
+values** — those are what we estimate. Actor attributes require a `name`
+column that matches the actor identifiers used in the REH.
+
+```{r}
+#| label: remstats
+
+actor_attrs_rs <- data.frame(
+  name   = as.character(actor_attrs$id),
+  time   = actor_attrs$time,
+  group  = actor_attrs$group,
+  active = actor_attrs$active
+)
+
+tie_effects <- ~ 1 +
+  inertia() +
+  reciprocity() +
+  otp() +
+  difference(variable = "active") +
+  same(variable = "group")
+
+stats <- remstats::remstats(
+  reh         = reh,
+  tie_effects = tie_effects,
+  attr_actors = actor_attrs_rs
+)
+```
+
+## 5) Estimate with remstimate (MLE)
+
+```{r}
+#| label: remstimate
+
+fit <- remstimate::remstimate(
+  reh    = reh,
+  stats  = stats,
+  method = "MLE"
+)
+```
+
+## 6) Parameter recovery comparison
+
+```{r}
+#| label: recovery
+
+true_params <- c(
+  baseline = -5.00,
+  inertia = 0.02,
+  reciprocity = 0.10,
+  otp = 0.03,
+  difference_active = 0.15,
+  same_group = 0.40
+)
+
+# estimated coefficients and their standard errors
+estimated <- coef(fit)
+se_vec <- sqrt(diag(vcov(fit)))
+
+recovery <- data.frame(
+  statistic = names(true_params),
+  true_value = true_params,
+  estimated = estimated,
+  se = se_vec,
+  difference = estimated - true_params,
+  row.names = NULL
+)
+
+# a parameter is "recovered" if the estimate is within 2 SE of the truth
+recovery$within_2se <- abs(recovery$difference) < 2 * recovery$se
+
+recovery
+```
+
+## 7) Summary
+
+```{r}
+#| label: summary
+
+data.frame(
+  max_abs_deviation  = max(abs(recovery$difference)),
+  mean_abs_deviation = mean(abs(recovery$difference)),
+  n_within_2se       = sum(recovery$within_2se, na.rm = TRUE),
+  n_statistics       = nrow(recovery),
+  all_within_2se     = all(recovery$within_2se, na.rm = TRUE)
+)
+```
+Max absolute deviation: **`r round(max(abs(recovery$difference)), 4)`**;
+mean absolute deviation: **`r round(mean(abs(recovery$difference)), 4)`**.
+Parameters within 2 SE of truth: **`r sum(recovery$within_2se, na.rm = TRUE)` /
+`r nrow(recovery)`**.

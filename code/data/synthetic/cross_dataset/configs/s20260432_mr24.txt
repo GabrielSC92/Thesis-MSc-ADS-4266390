@@ -1,0 +1,56 @@
+<?xml version="1.0" ?>
+<eventnet.configuration name="eventnet.configuration" version="1.3">
+  <input.files accept=".csv" has.header="true" delimiter="COMMA" quote.char="DOUBLEQUOTE">
+    <input.directory name="C:\Users\Gabri\Documents\!Utrecht University\MSc - Applied Data Science\Thesis\Thesis-MSc-ADS-REM/code/data/synthetic/cross_dataset/inputs"/>
+    <file name="s20260432_mr24_eventnet.csv"/>
+  </input.files>
+  <output.directory name="C:\Users\Gabri\Documents\!Utrecht University\MSc - Applied Data Science\Thesis\Thesis-MSc-ADS-REM/code/data/synthetic/cross_dataset/eventnet_out"/>
+  <event.components>
+    <component name="SOURCE" column.name="sender.id"/>
+    <component name="TARGET" column.name="receiver.id"/>
+    <component name="TIME" column.name="time"/>
+    <component name="TYPE" column.name="type"/>
+    <component name="WEIGHT" column.name="weight"/>
+    <component name="EVENT_INTERVAL_ID" column.name="message.id"/>
+  </event.components>
+  <network.mode is.multimode="false"/>
+  <event.types>
+    <type name="active" implied="false" admits.loops="true"/>
+    <type name="is.group" implied="false" admits.loops="true"/>
+    <type name="email" implied="false" admits.loops="false"/>
+    <type name="add.actor" implied="false" admits.loops="true"/>
+  </event.types>
+  <time time.format.type="DECIMAL" interval.type="EVENT_INTERVAL" decimal.precision="1.0E-6" time.unit="1"/>
+  <attribute name="at.risk" class="NODE_LEVEL" type="DEFAULT_NODE_LEVEL_ATTRIBUTE" description="">
+    <attr.update type="SET_VALUE_TO"/>
+    <event.response event.type="add.actor" direction="OUT"/>
+  </attribute>
+  <attribute name="is.group" class="NODE_LEVEL" type="DEFAULT_NODE_LEVEL_ATTRIBUTE" description="">
+    <attr.update type="SET_VALUE_TO"/>
+    <event.response event.type="is.group" direction="OUT"/>
+  </attribute>
+  <attribute name="active" class="NODE_LEVEL" type="DEFAULT_NODE_LEVEL_ATTRIBUTE" description="">
+    <attr.update type="SET_VALUE_TO"/>
+    <event.response event.type="active" direction="OUT"/>
+  </attribute>
+  <attribute name="email" class="DIR_HYPER_LEVEL" type="DEFAULT_DHE_ATTRIBUTE" description="">
+    <attr.update type="INCREMENT_VALUE_BY"/>
+    <event.response event.type="email"/>
+  </attribute>
+  <attribute name="email.dyadic" class="DYAD_LEVEL" type="DYAD_LEVEL_ATTRIBUTE_FROM_DHE" description="">
+    <attr.update type="INCREMENT_VALUE_BY"/>
+    <event.response event.type="email"/>
+  </attribute>
+  <statistic name="s.r.sub.rep.1" type="DHE_SUB_REPETITION_STAT" description="Inertia (dyadic repetition, outgoing)" direction.1="OUT" hyperedge.attr.name.1="email" source.size="1" target.size="1"/>
+  <statistic name="reciprocation" type="DHE_SUB_REPETITION_STAT" description="Reciprocity (dyadic repetition, incoming)" direction.1="IN" hyperedge.attr.name.1="email" source.size="1" target.size="1"/>
+  <statistic name="absdiff.active" type="DHE_NODE_STAT" description="Difference on active (absolute difference of continuous attribute)" node.attr.name.1="active" na.value="-1.7976931348623157E308">
+    <aggregation.function type="ABSDIFF"/>
+  </statistic>
+  <statistic name="catdiff.group" type="DHE_NODE_STAT" description="Same group (categorical difference -- homophily)" node.attr.name.1="is.group" na.value="-1.7976931348623157E308">
+    <aggregation.function type="CATDIFF"/>
+  </statistic>
+  <statistic name="otp" type="DHE_CLOSURE_STAT" description="OTP (triadic closure)" dyad.attr.name.1="email.dyadic" direction.1="OUT" dyad.attr.name.2="email.dyadic" direction.2="OUT"/>
+  <observation name="COND_SENDER" type="COND_SIZE_DHE_OBS" exclude.loops="true" apply.case.control.sampling="true" number.of.non.events="100" non.events.are.per.observed.event="true" source.is.non.zero.on.attr="at.risk" target.is.non.zero.on.attr="at.risk" condition.on.source="true">
+    <consider.event.type name="email"/>
+  </observation>
+</eventnet.configuration>

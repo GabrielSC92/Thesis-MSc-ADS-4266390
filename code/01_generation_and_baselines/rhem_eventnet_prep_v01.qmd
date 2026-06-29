@@ -1,0 +1,192 @@
+---
+title: "RHEM / eventnet prep (v01)"
+author: "Gabriel"
+date: "2026-04-30"
+format:
+  html:
+    theme: darkly
+    toc: true
+    code-fold: false
+    embed-resources: true
+---
+
+Export MR datasets for eventnet, then fit RHEM with `coxph` on the design matrices.
+
+Inputs: `mr_levels_v02/` from `baseline_and_mr_generation_v02.qmd`.  
+Outputs: CSVs in `eventnet_exports/`; coefficients in `eventnet_gui_statistics/rhem_coefficient_summary.csv`.
+
+After exporting, run eventnet on each CSV (see `eventnet_gui_statistics/eventnet.configuration.txt`) and save design matrices to `eventnet_gui_statistics/`.
+
+## Setup
+
+```{r}
+#| label: setup
+#| message: false
+
+library(survival)
+
+project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+mr_dir       <- file.path(project_root, "code", "data", "synthetic", "mr_levels_v02")
+export_dir   <- file.path(project_root, "code", "data", "synthetic", "eventnet_exports")
+stats_dir    <- file.path(project_root, "code", "data", "synthetic", "eventnet_gui_statistics")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Load MR data
+
+```{r}
+#| label: load-data
+
+mr_levels <- c(0.02, 0.08, 0.16, 0.24)
+
+mr_long_list <- list()
+for (p in mr_levels) {
+  tag <- sprintf("mr%02d", as.integer(round(p * 100)))
+  mr_long_list[[tag]] <- read.csv(
+    file.path(mr_dir, paste0("reh_", tag, "_from_baseline_long.csv"))
+  )
+}
+
+actor_attrs <- read.csv(
+  file.path(project_root, "code", "data", "synthetic",
+            "reh_baseline_0mr_actor_attributes.csv")
+)
+```
+
+## Build eventnet CSVs
+
+```{r}
+#| label: build-eventnet-csvs
+
+n_actors <- nrow(actor_attrs)
+
+# eventnet wants the actor attributes to be "set" at a time before the first
+# real event, so we use a dummy time just below the earliest event time
+t_dummy <- min(mr_long_list[[1]]$time) - 1
+
+build_eventnet_csv <- function(long_df, actor_df, t_dummy) {
+  # one "add.actor" row per actor at the dummy time
+  add_actors <- data.frame(
+    message.id = 0, sender.id = actor_df$id, receiver.id = actor_df$id,
+    time = t_dummy, type = "add.actor", weight = 1
+  )
+
+  # group membership: actors with group == 1
+  group_ids <- actor_df$id[actor_df$group == 1]
+  attr_group <- data.frame(
+    message.id = 0, sender.id = group_ids, receiver.id = group_ids,
+    time = t_dummy, type = "is.group", weight = 1
+  )
+
+  # the continuous "active" attribute is stored in the weight column
+  attr_active <- data.frame(
+    message.id = 0, sender.id = actor_df$id, receiver.id = actor_df$id,
+    time = t_dummy, type = "active", weight = actor_df$active
+  )
+
+  # the real email events
+  events <- data.frame(
+    message.id = long_df$event_id, sender.id = long_df$sender,
+    receiver.id = long_df$receiver, time = long_df$time,
+    type = "email", weight = 1
+  )
+
+  out <- rbind(add_actors, attr_group, attr_active, events)
+  out[order(out$time, out$message.id), ]
+}
+
+for (tag in names(mr_long_list)) {
+  out <- build_eventnet_csv(mr_long_list[[tag]], actor_attrs, t_dummy)
+  write.csv(out, file.path(export_dir, paste0(tag, "_eventnet.csv")),
+            row.names = FALSE)
+}
+```
+
+## Verify exports
+
+```{r}
+#| label: verify
+
+verify_df <- data.frame()
+for (f in list.files(export_dir, pattern = "\\.csv$")) {
+  df <- read.csv(file.path(export_dir, f))
+  verify_df <- rbind(verify_df, data.frame(
+    file = f,
+    event_rows = sum(df$type == "email"),
+    dummy_rows = sum(df$type != "email")
+  ))
+}
+
+verify_df
+```
+
+## RHEM estimation (coxph)
+
+Expects eventnet outputs named `{tag}_eventnet_{TAG}_COND_SENDER.csv` in `stats_dir`.
+
+```{r}
+#| label: rhem-estimation
+
+rhem_results <- list()
+mr_tags <- sprintf("mr%02d", as.integer(round(mr_levels * 100)))
+
+for (tag in mr_tags) {
+  obs_name <- paste0(toupper(tag), "_COND_SENDER")
+  out_file <- file.path(stats_dir, paste0(tag, "_eventnet_", obs_name, ".csv"))
+  if (!file.exists(out_file)) next
+
+  events <- read.csv(out_file)
+
+  # keep the real events plus the non-observed risk-set rows eventnet added
+  events <- events[events$TYPE == "email" | events$IS_OBSERVED == 0, ]
+
+  # the Enron tutorial applies sqrt() to the endogenous statistics before fitting
+  for (v in c("s.r.sub.rep.1", "reciprocation", "otp")) {
+    if (v %in% names(events)) events[[v]] <- sqrt(events[[v]])
+  }
+
+  rhem_results[[tag]] <- coxph(
+    Surv(time = rep(1, nrow(events)), event = events$IS_OBSERVED) ~
+      s.r.sub.rep.1 + reciprocation + otp + absdiff.active + catdiff.group +
+      strata(EVENT_INTERVAL),
+    data = events
+  )
+}
+
+length(rhem_results)
+```
+
+## Coefficient summary
+
+```{r}
+#| label: extract-coefs
+
+# translate eventnet's statistic names into our generating-effect names
+effect_map <- c(
+  "s.r.sub.rep.1"  = "inertia",
+  "reciprocation"  = "reciprocity",
+  "otp"            = "otp",
+  "absdiff.active" = "difference_active",
+  "catdiff.group"  = "same_group"
+)
+
+rhem_coefs <- data.frame()
+for (tag in names(rhem_results)) {
+  fit <- rhem_results[[tag]]
+  stat_names <- names(coef(fit))
+  rhem_coefs <- rbind(rhem_coefs, data.frame(
+    mr_level  = tag,
+    statistic = stat_names,
+    estimate  = as.numeric(coef(fit)),
+    se        = sqrt(diag(vcov(fit))),
+    effect    = effect_map[stat_names]
+  ))
+}
+
+if (nrow(rhem_coefs) > 0) {
+  write.csv(rhem_coefs, file.path(stats_dir, "rhem_coefficient_summary.csv"),
+            row.names = FALSE)
+}
+
+rhem_coefs
+```

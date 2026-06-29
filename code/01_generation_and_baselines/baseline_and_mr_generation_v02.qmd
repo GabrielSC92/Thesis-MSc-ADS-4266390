@@ -1,0 +1,233 @@
+---
+title: "Baseline and MR generation (v02)"
+author: "Gabriel"
+date: "2026-05-19"
+format:
+  html:
+    theme: darkly
+    toc: true
+    code-fold: false
+    embed-resources: true
+---
+
+Simulates the 0% MR baseline with `remulateTie`, then injects MR at 0/2/8/16/24%
+via additive random tagging. Writes CSVs to `code/data/synthetic/mr_levels_v02/`.
+
+## Setup
+
+```{r}
+#| label: setup
+#| message: false
+
+library(remulate)
+
+project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+output_dir   <- file.path(project_root, "code", "data", "synthetic")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Baseline (0% MR)
+
+```{r}
+#| label: baseline-generation
+
+set.seed(20260423)
+
+n_actors <- 20
+n_events <- 2000
+
+actor_attrs <- data.frame(
+  id = 1:n_actors,
+  time = rep(0, n_actors),
+  group = sample(c(0, 1), n_actors, replace = TRUE),
+  active = rnorm(n_actors),
+  senior = sample(c(0, 1), n_actors, replace = TRUE, prob = c(0.7, 0.3))
+)
+
+effects_baseline <- ~ baseline(-5) +
+  inertia(0.02) +
+  reciprocity(0.10) +
+  otp(0.03) +
+  difference(0.15, variable = "active", attr_actors = actor_attrs) +
+  same(0.4, variable = "group", attr_actors = actor_attrs)
+
+reh_0mr <- remulateTie(
+  effects = effects_baseline,
+  actors  = 1:n_actors,
+  endTime = Inf,
+  events  = n_events,
+  initial = 0
+)
+
+reh_0mr$event_id <- seq_len(nrow(reh_0mr))
+
+stopifnot(sum(duplicated(reh_0mr$time)) == 0)
+```
+
+```{r}
+#| label: save-baseline
+
+write.csv(reh_0mr,
+          file.path(output_dir, "reh_baseline_0mr_20actors_2000events.csv"),
+          row.names = FALSE)
+write.csv(actor_attrs,
+          file.path(output_dir, "reh_baseline_0mr_actor_attributes.csv"),
+          row.names = FALSE)
+```
+
+## MR helper (additive random tagging)
+
+We turn the one-row-per-event baseline into a "long" table with one row per
+(sender, receiver) pair. A random fraction `p_mr_event` of events is tagged as
+multi-receiver, and each tagged event gets one extra receiver (chosen so it is
+not the sender or the original receiver).
+
+```{r}
+#| label: mr-v02-helper
+
+make_mr <- function(reh_df, actor_ids, p_mr_event, seed) {
+
+  set.seed(seed)
+  n_events <- nrow(reh_df)
+  n_to_tag <- round(p_mr_event * n_events)
+
+  # randomly pick which events become multi-receiver
+  tagged_ids <- sample(reh_df$event_id, n_to_tag)
+
+  # build the long table one event at a time
+  mr_long <- data.frame()
+  for (i in 1:n_events) {
+    row_i <- reh_df[i, ]
+    is_tagged <- row_i$event_id %in% tagged_ids
+    this_size <- if (is_tagged) 2 else 1
+
+    # every event keeps its original sender -> receiver row
+    base_row <- data.frame(
+      event_id = row_i$event_id,
+      sender   = row_i$sender,
+      receiver = row_i$receiver,
+      time     = row_i$time,
+      mr_size  = this_size
+    )
+    mr_long <- rbind(mr_long, base_row)
+
+    # tagged events also get one extra receiver
+    if (is_tagged) {
+      candidates <- setdiff(actor_ids, c(row_i$sender, row_i$receiver))
+      extra_receiver <- sample(candidates, 1)
+      extra_row <- data.frame(
+        event_id = row_i$event_id,
+        sender   = row_i$sender,
+        receiver = extra_receiver,
+        time     = row_i$time,
+        mr_size  = this_size
+      )
+      mr_long <- rbind(mr_long, extra_row)
+    }
+  }
+
+  mr_long <- mr_long[order(mr_long$event_id), ]
+
+  # count how many receivers each event ended up with
+  mr_event_table <- aggregate(receiver ~ event_id + sender + time + mr_size,
+                              data = mr_long, FUN = length)
+  names(mr_event_table)[names(mr_event_table) == "receiver"] <- "n_receivers_observed"
+  mr_event_table <- mr_event_table[order(mr_event_table$event_id), ]
+
+  list(
+    mr_long          = mr_long,
+    mr_event_table   = mr_event_table,
+    achieved_p_event = n_to_tag / n_events,
+    n_mr_events      = n_to_tag,
+    n_long_rows      = nrow(mr_long),
+    seed             = seed
+  )
+}
+```
+
+## Build MR levels
+
+```{r}
+#| label: build-mr-levels-v02
+
+mr_levels  <- c(0, 0.02, 0.08, 0.16, 0.24)
+mr_dir_v02 <- file.path(output_dir, "mr_levels_v02")
+dir.create(mr_dir_v02, recursive = TRUE, showWarnings = FALSE)
+
+mr_master_seed <- 20260519
+
+# one entry per MR level
+mr_results <- list()
+
+for (p in mr_levels) {
+  seed_k <- mr_master_seed + as.integer(p * 1000)
+
+  res <- make_mr(
+    reh_df     = reh_0mr,
+    actor_ids  = 1:n_actors,
+    p_mr_event = p,
+    seed       = seed_k
+  )
+
+  # e.g. p = 0.08 -> "mr08"
+  level_tag <- sprintf("mr%02d", as.integer(round(p * 100)))
+  mr_results[[level_tag]] <- res
+
+  write.csv(
+    res$mr_long,
+    file.path(mr_dir_v02, paste0("reh_", level_tag, "_from_baseline_long.csv")),
+    row.names = FALSE
+  )
+  write.csv(
+    res$mr_event_table,
+    file.path(mr_dir_v02, paste0("reh_", level_tag, "_from_baseline_event_table.csv")),
+    row.names = FALSE
+  )
+}
+```
+
+## Checks
+
+```{r}
+#| label: verify-v02
+
+# build one summary row per MR level
+check_df <- data.frame()
+for (p in mr_levels) {
+  level_tag <- sprintf("mr%02d", as.integer(round(p * 100)))
+  res <- mr_results[[level_tag]]
+  check_df <- rbind(check_df, data.frame(
+    level            = paste0(round(p * 100), "%"),
+    target_p_event   = p,
+    mr_event_count   = res$n_mr_events,
+    achieved_p_event = round(res$achieved_p_event, 4),
+    long_rows        = res$n_long_rows,
+    seed             = res$seed
+  ))
+}
+
+check_df
+```
+
+```{r}
+#| label: receiver-uniqueness-check
+
+# sanity check: within each multi-receiver event the receivers should all be
+# different from each other and different from the sender
+for (p in mr_levels) {
+  level_tag <- sprintf("mr%02d", as.integer(round(p * 100)))
+  mr_long <- mr_results[[level_tag]]$mr_long
+  mr_only <- mr_long[mr_long$mr_size > 1, ]
+  if (nrow(mr_only) == 0) next
+
+  for (id in unique(mr_only$event_id)) {
+    grp <- mr_only[mr_only$event_id == id, ]
+    duplicate_receiver <- any(duplicated(grp$receiver))
+    receiver_is_sender <- any(grp$receiver == grp$sender[1])
+    if (duplicate_receiver || receiver_is_sender) {
+      stop(paste0("Receiver uniqueness violated at MR = ", p * 100,
+                  "% for event ", id))
+    }
+  }
+}
+```
