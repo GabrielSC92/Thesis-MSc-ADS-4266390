@@ -25,14 +25,13 @@ The study is **simulation-first and uses synthetic data exclusively** (no empiri
 ## Repository Structure
 
 ```
-thesis/                         # Thesis paper (DOCX + PDF)
+thesis/                           # Thesis paper (DOCX + PDF)
 code/
-  thesis/
-    01_generation_and_baselines/      # Synthetic generation + native benchmark workflows
-    02_transformations_and_estimation/ # Dyadic transformation and REM estimation workflows
-    03_evaluation_and_reporting/      # Threshold/diagnostic evaluation, tables, and figures
+  01_generation_and_baselines/      # Synthetic generation + native benchmark workflows
+  02_transformations_and_estimation/ # Dyadic transformation and REM estimation workflows
+  03_evaluation_and_reporting/      # Threshold/diagnostic evaluation, tables, and figures
   data/
-    synthetic/                  # Synthetic datasets (baselines, MR levels, eventnet exports, results)
+    synthetic/                      # Synthetic datasets (baselines, MR levels, eventnet exports, results)
 ```
 
 ## Tools
@@ -51,9 +50,8 @@ The primary thesis result is the dataset-averaged threshold over 28 independent 
 
 | Step | What to run | Output / notes |
 | ---- | ----------- | -------------- |
-| 1 | `Rscript code/thesis/01_generation_and_baselines/cross_dataset_eventnet_batch_v01.R` | **~22 min.** Generates baselines, MR-injects, fits REM and RHEM per (seed × MR level). Writes `code/data/synthetic/cross_dataset/{rem,rhem}_coefs_by_seed.csv`. Optional smoke test: `--n-seeds=2`. eventnet runs headless (no GUI). |
-| 2 | `quarto render code/thesis/01_generation_and_baselines/cross_dataset_averaging_v01.qmd` | Aggregation, threshold, and recommendation; writes `cross_dataset_summary_v01.csv` |
-| 3 | From `code/thesis/03_evaluation_and_reporting/`: `Rscript _briefing_figures.R` | PNG figures (must be run from that folder) |
+| 1 | `Rscript code/01_generation_and_baselines/cross_dataset_eventnet_batch_v01.R` | **~22 min.** Generates baselines, MR-injects, fits REM and RHEM per (seed × MR level). Writes `code/data/synthetic/cross_dataset/{rem,rhem}_coefs_by_seed.csv`. Optional smoke test: `--n-seeds=2`. eventnet runs headless (no GUI). |
+| 2 | `quarto render code/01_generation_and_baselines/cross_dataset_averaging_v02.qmd` | Aggregation, threshold, and recommendation; writes the cross-dataset summary plus the threshold figure under `code/03_evaluation_and_reporting/figures/` |
 
 ### Single-seed workflow (illustrative)
 
@@ -61,10 +59,10 @@ A single canonical seed (`20260423`) reproduces the REM-vs-RHEM comparison on on
 
 | Step | What to run | Output / notes |
 | ---- | ----------- | -------------- |
-| 1 | `quarto render code/thesis/01_generation_and_baselines/baseline_and_mr_generation_v02.qmd` | Baseline + MR-level CSVs in `code/data/synthetic/mr_levels_v02/` |
-| 2 | `quarto render code/thesis/01_generation_and_baselines/rem_parameter_recovery_v01.qmd` | Validates REM recovery on the 0% baseline |
-| 3 | `quarto render code/thesis/01_generation_and_baselines/rhem_eventnet_prep_v01.qmd` | eventnet input CSVs; re-render after eventnet produces design matrices |
-| 4 | `quarto render code/thesis/02_transformations_and_estimation/noise_reshuffle_rem_v02.qmd` | REM-on-transformed-data estimates in `code/data/synthetic/rem_noise_estimates/` |
+| 1 | `quarto render code/01_generation_and_baselines/baseline_and_mr_generation_v02.qmd` | Baseline + MR-level CSVs in `code/data/synthetic/mr_levels_v02/` |
+| 2 | `quarto render code/01_generation_and_baselines/rem_parameter_recovery_v01.qmd` | Validates REM recovery on the 0% baseline |
+| 3 | `quarto render code/01_generation_and_baselines/rhem_eventnet_prep_v01.qmd` | eventnet input CSVs; re-render after eventnet produces design matrices |
+| 4 | `quarto render code/02_transformations_and_estimation/noise_reshuffle_rem_v02.qmd` | REM-on-transformed-data estimates in `code/data/synthetic/rem_noise_estimates/` |
 
 ## Supervision
 
