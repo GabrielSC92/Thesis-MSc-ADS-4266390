@@ -41,8 +41,8 @@ library(remify)
 library(remstats)
 library(remstimate)
 
-# project_root points to the repo root (three folders up from this notebook)
-project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+# project_root points to the repo root (two folders up from this notebook)
+project_root <- normalizePath(file.path("..", ".."), mustWork = TRUE)
 ```
 
 ## 2) Load baseline data

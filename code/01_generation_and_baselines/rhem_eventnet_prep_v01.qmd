@@ -25,7 +25,7 @@ After exporting, run eventnet on each CSV (see `eventnet_gui_statistics/eventnet
 
 library(survival)
 
-project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path("..", ".."), mustWork = TRUE)
 mr_dir       <- file.path(project_root, "code", "data", "synthetic", "mr_levels_v02")
 export_dir   <- file.path(project_root, "code", "data", "synthetic", "eventnet_exports")
 stats_dir    <- file.path(project_root, "code", "data", "synthetic", "eventnet_gui_statistics")

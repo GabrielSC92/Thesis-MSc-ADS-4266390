@@ -23,7 +23,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 
-project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path("..", ".."), mustWork = TRUE)
 cd_dir <- file.path(project_root, "code", "data", "synthetic", "cross_dataset")
 
 rem_csv  <- file.path(cd_dir, "rem_coefs_by_seed.csv")
@@ -205,19 +205,10 @@ stat_col <- c(
   same_group        = "#CC79A7"
 )
 
-# Saturated, high-contrast palette for poster / projection
-stat_col_poster <- c(
-  inertia           = "#009ABF",  # cyan (distinct from purple / green)
-  reciprocity       = "#C45C00",  # dark orange
-  otp               = "#007A33",  # strong green
-  difference_active = "#B50000",  # strong red
-  same_group        = "#D4008F"   # magenta (distinct from blue / cyan)
-)
-
 make_norm_plot <- function(base_size, line_w, point_s, err_w, err_x, ref_w,
-                           colours = stat_col, poster = FALSE) {
-  ref_colour <- if (poster) "grey15" else "grey40"
-  fail_alpha <- if (poster) 0.18 else 0.10
+                           colours = stat_col) {
+  ref_colour <- "grey40"
+  fail_alpha <- 0.10
 
   p <- ggplot(norm_rem, aes(x = mr_level_pct, y = bias_ratio,
                             colour = statistic, group = statistic)) +
@@ -228,9 +219,9 @@ make_norm_plot <- function(base_size, line_w, point_s, err_w, err_x, ref_w,
     geom_vline(xintercept = threshold_mark, linetype = "dotted",
                colour = ref_colour, linewidth = ref_w) +
     geom_errorbar(aes(ymin = bias_ratio_lo, ymax = bias_ratio_hi),
-                  width = err_x, linewidth = err_w, alpha = if (poster) 0.85 else 0.7) +
+                  width = err_x, linewidth = err_w, alpha = 0.7) +
     geom_line(linewidth = line_w) +
-    geom_point(size = point_s, stroke = if (poster) 0.6 else 0) +
+    geom_point(size = point_s, stroke = 0) +
     scale_colour_manual(values = colours, drop = FALSE) +
     scale_x_continuous(breaks = sort(unique(norm_rem$mr_level_pct))) +
     labs(
@@ -240,29 +231,16 @@ make_norm_plot <- function(base_size, line_w, point_s, err_w, err_x, ref_w,
     ) +
     theme_classic(base_size = base_size) +
     theme(
-      legend.position = if (poster) "right" else "top",
-      legend.key.width  = unit(if (poster) 1.8 else 1.6, "lines"),
-      legend.key.height = unit(if (poster) 1.2 else 0.8, "lines"),
+      legend.position = "top",
+      legend.key.width  = unit(1.6, "lines"),
+      legend.key.height = unit(0.8, "lines"),
       axis.line = element_line(linewidth = ref_w * 0.7, colour = "black"),
       axis.ticks = element_line(colour = "black", linewidth = ref_w * 0.5),
       axis.text = element_text(colour = "black"),
       axis.title = element_text(colour = "black", face = "bold"),
       legend.title = element_text(face = "bold"),
-      plot.margin = if (poster) margin(12, 18, 12, 12) else margin(10, 14, 10, 14)
+      plot.margin = margin(10, 14, 10, 14)
     )
-
-  if (poster) {
-    p <- p + theme(
-      axis.title.x = element_text(size = 26, margin = margin(t = 10)),
-      axis.title.y = element_text(size = 26, margin = margin(r = 10)),
-      axis.text.x  = element_text(size = 22),
-      axis.text.y  = element_text(size = 22),
-      legend.title = element_text(size = 24),
-      legend.text  = element_text(size = 22),
-      legend.spacing.y = unit(0.35, "cm"),
-      legend.box.margin = margin(0, 0, 0, 12)
-    )
-  }
 
   p
 }
@@ -272,30 +250,14 @@ p_norm <- make_norm_plot(
   err_w = 0.4, err_x = 0.8, ref_w = 0.5
 )
 
-p_norm_poster <- make_norm_plot(
-  base_size = 22, line_w = 2.0, point_s = 6,
-  err_w = 1.1, err_x = 1.4, ref_w = 1.0,
-  colours = stat_col_poster, poster = TRUE
-)
-
 p_norm
 
-fig_dir <- file.path(project_root, "code", "thesis", "03_evaluation_and_reporting", "figures")
-poster_fig_dir <- file.path(project_root, "drafts", "03_results", "figures")
+fig_dir <- file.path(project_root, "code", "03_evaluation_and_reporting", "figures")
 dir.create(fig_dir, showWarnings = FALSE)
-dir.create(poster_fig_dir, showWarnings = FALSE)
 
 ggsave(
   file.path(fig_dir, "cross_dataset_normalised_threshold_v02.png"),
   p_norm, width = 10, height = 6, dpi = 300
-)
-ggsave(
-  file.path(poster_fig_dir, "cross_dataset_normalised_threshold_v02.png"),
-  p_norm_poster, width = 20, height = 6, dpi = 600
-)
-ggsave(
-  file.path(poster_fig_dir, "cross_dataset_normalised_threshold_poster.png"),
-  p_norm_poster, width = 20, height = 6, dpi = 600
 )
 ```
 

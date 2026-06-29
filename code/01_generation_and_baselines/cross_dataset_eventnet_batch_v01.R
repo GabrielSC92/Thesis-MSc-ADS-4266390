@@ -28,7 +28,7 @@ true_params <- c(
 # locate project folders; needs to be run via Rscript so --file= is set
 script_path  <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
 script_dir   <- dirname(normalizePath(script_path))
-project_root <- normalizePath(file.path(script_dir, "..", "..", ".."))
+project_root <- normalizePath(file.path(script_dir, "..", ".."))
 
 data_dir   <- file.path(project_root, "code", "data", "synthetic")
 out_root   <- file.path(data_dir, "cross_dataset")

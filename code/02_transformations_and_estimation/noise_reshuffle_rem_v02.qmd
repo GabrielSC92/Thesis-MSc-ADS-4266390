@@ -20,7 +20,7 @@ library(remify)
 library(remstats)
 library(remstimate)
 
-project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path("..", ".."), mustWork = TRUE)
 data_dir   <- file.path(project_root, "code", "data", "synthetic")
 mr_dir     <- file.path(data_dir, "mr_levels_v02")
 output_dir <- file.path(data_dir, "rem_noise_estimates")

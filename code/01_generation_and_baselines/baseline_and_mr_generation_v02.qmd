@@ -21,7 +21,7 @@ via additive random tagging. Writes CSVs to `code/data/synthetic/mr_levels_v02/`
 
 library(remulate)
 
-project_root <- normalizePath(file.path("..", "..", ".."), mustWork = TRUE)
+project_root <- normalizePath(file.path("..", ".."), mustWork = TRUE)
 output_dir   <- file.path(project_root, "code", "data", "synthetic")
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 ```
