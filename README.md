@@ -1,98 +1,76 @@
-# REM with Multiple Receivers: Transforming Multi-Receiver Event Data into Dyadic Form
+# When Is Dyadic Transformation Reliable? A Threshold for Relational Event Models with Multi-Receiver Events
 
 **MSc Applied Data Science -- Utrecht University (2026)**
+Gabriel Silva Cheinquer
 
 ## About
 
-This repository contains the code, literature notes, and project documentation for my master's thesis on Relational Event Models (REM) with multiple receivers.
+The Relational Event Model (REM) is the standard framework for analysing relational event history data, but it is defined entirely on directed dyads (one sender, one receiver). Many real communication processes are *multi-receiver*: a single sender addresses several receivers in one event. A common workaround is to transform each multi-receiver event into several dyadic events separated by a small tie-breaking timestamp noise.
 
-Standard REMs assume each interaction event has a single sender and a single receiver. Many real-world interactions -- emails, team meetings, marketing communications -- involve multiple receivers simultaneously. This thesis investigates whether multi-receiver relational events can be transformed into multiple dyadic (single-receiver) events while preserving valid REM results, and evaluates which transformation strategies best maintain model fit and parameter stability.
+Using a controlled simulation with known dyadic generating parameters, this thesis establishes the **threshold**: the proportion of multi-receiver events up to which the dyadic transformation still recovers the underlying REM parameters reliably, and beyond which it cannot.
+
+**Headline finding.** A three-zone operating range: recovery is reliable up to a multi-receiver share of about 8%, borderline between 8% and roughly 12%, and unreliable above 12%, with the triadic outgoing-two-paths effect binding first.
 
 ## Approach
 
-1. Generate synthetic multi-receiver event histories with known parameters using [eventnet](https://github.com/juergenlerner/eventnet) (Relational Hyperevent Model)
-2. Apply different dyadic transformation strategies to convert multi-receiver events into single-receiver form
-3. Fit standard dyadic REMs to the transformed data using R (`remulate`)
-4. Compare recovered parameters against the RHEM ground truth
-5. Validate findings on real-world data (Apollo 13 mission communications)
+The study is **simulation-first and uses synthetic data exclusively** (no empirical dataset is analysed). The configuration is fixed at `N = 20` actors and `M = 2,000` events, with multi-receiver (MR) levels at **0 / 2 / 8 / 16 / 24%**.
+
+1. Generate synthetic dyadic baseline event histories with known parameters using R (`remulate`), one per independent seed
+2. Construct multi-receiver versions by **additive random tagging**: add one extra (signal-free) receiver to a controlled proportion of events at each MR level
+3. Apply the **tie-breaking timestamp-noise** transformation to convert multi-receiver events back to single-receiver (dyadic) form while preserving the full-likelihood exact-timing requirement
+4. Fit a standard dyadic REM to the transformed data using R (`remify`, `remstats`, `remstimate`)
+5. Fit a native Relational Hyperevent Model (RHEM) via [eventnet](https://github.com/juergenlerner/eventnet) + `survival` (stratified Cox) as a **contextual benchmark**
+6. Compare recovered REM parameters against the **known dyadic generating truth** across 28 independent baseline datasets, and apply a per-effect recovery-noise band to determine the reliability threshold
 
 ## Repository Structure
 
 ```
-THESIS_TRACKER.md              # Project management and meeting log
-literature/
-  LITERATURE_NOTES.md           # Paper summaries, key concepts, glossary
-  papers/                       # Reading list PDFs
+thesis/                         # Thesis paper (DOCX + PDF)
 code/
-  README.md                     # Structure and naming conventions for code work
-  thesis/                       # Thesis-relevant code branch
+  thesis/
     01_generation_and_baselines/      # Synthetic generation + native benchmark workflows
     02_transformations_and_estimation/ # Dyadic transformation and REM estimation workflows
     03_evaluation_and_reporting/      # Threshold/diagnostic evaluation, tables, and figures
-  non_thesis/                   # Non-thesis code branch
-    01_exploration/             # Exploratory analyses and scratch work
-    02_sandbox/                 # Non-thesis scripts and experiments
-  data/                         # Datasets (synthetic + real-world)
+  data/
+    synthetic/                  # Synthetic datasets (baselines, MR levels, eventnet exports, results)
 ```
+
+## Tools
+
+- **R** (4.6+) -- synthetic generation (`remulate`), dyadic REM fitting (`remify`, `remstats`, `remstimate`), and the RHEM benchmark (`survival`)
+- **Quarto** -- render `.qmd` notebooks to HTML
+- **Java** + **eventnet 1.3** (`eventnet-1.3.jar`) -- RHEM design matrices and the cross-dataset batch harness (headless via `java -jar`)
+
+## Reproducibility
+
+All commands are run from the repository root. MR levels are fixed at **0 / 2 / 8 / 16 / 24%**; the baseline is **N = 2,000 events**, **20 actors**. The full pipeline is deterministic in the baseline seed, so every reported number can be regenerated from the seed list alone.
+
+### Headline result (cross-dataset threshold)
+
+The primary thesis result is the dataset-averaged threshold over 28 independent baseline seeds.
+
+| Step | What to run | Output / notes |
+| ---- | ----------- | -------------- |
+| 1 | `Rscript code/thesis/01_generation_and_baselines/cross_dataset_eventnet_batch_v01.R` | **~22 min.** Generates baselines, MR-injects, fits REM and RHEM per (seed × MR level). Writes `code/data/synthetic/cross_dataset/{rem,rhem}_coefs_by_seed.csv`. Optional smoke test: `--n-seeds=2`. eventnet runs headless (no GUI). |
+| 2 | `quarto render code/thesis/01_generation_and_baselines/cross_dataset_averaging_v01.qmd` | Aggregation, threshold, and recommendation; writes `cross_dataset_summary_v01.csv` |
+| 3 | From `code/thesis/03_evaluation_and_reporting/`: `Rscript _briefing_figures.R` | PNG figures (must be run from that folder) |
+
+### Single-seed workflow (illustrative)
+
+A single canonical seed (`20260423`) reproduces the REM-vs-RHEM comparison on one baseline.
+
+| Step | What to run | Output / notes |
+| ---- | ----------- | -------------- |
+| 1 | `quarto render code/thesis/01_generation_and_baselines/baseline_and_mr_generation_v02.qmd` | Baseline + MR-level CSVs in `code/data/synthetic/mr_levels_v02/` |
+| 2 | `quarto render code/thesis/01_generation_and_baselines/rem_parameter_recovery_v01.qmd` | Validates REM recovery on the 0% baseline |
+| 3 | `quarto render code/thesis/01_generation_and_baselines/rhem_eventnet_prep_v01.qmd` | eventnet input CSVs; re-render after eventnet produces design matrices |
+| 4 | `quarto render code/thesis/02_transformations_and_estimation/noise_reshuffle_rem_v02.qmd` | REM-on-transformed-data estimates in `code/data/synthetic/rem_noise_estimates/` |
 
 ## Supervision
 
 - **Daily supervisor:** Mahdi Shafiee Kamalabad (Utrecht University)
 - **Secondary supervisor:** Myrthe Prins (Utrecht University)
 
-## Tools
+## License
 
-- **R** (4.6+) -- REM fitting and analysis (`remulate`, `remify`, `remstats`, `remstimate`, `survival`)
-- **Quarto** -- render `.qmd` notebooks to HTML
-- **Java** + **eventnet 1.3** (`eventnet-1.3.jar`) -- RHEM design matrices and the cross-dataset batch harness (headless via `java -jar`)
-
-## Reproducibility pipeline
-
-The data-generation phase is **closed** (2026-06-03). The steps below reproduce the thesis synthetic pipeline from scratch. Methodological rationale and decision history live in `THESIS_TRACKER.md`; this section is the practical run order only.
-
-**Prerequisites:** run all commands from the repository root unless noted. MR levels are fixed at **0 / 2 / 8 / 16 / 24%**; baseline size is **N = 2,000 events**, **20 actors**.
-
-### Path A -- canonical single-seed workflow
-
-Used for the 2026-05-27 presentation and the single-seed REM-vs-RHEM comparison (canonical seed `20260423`).
-
-| Step | What to run | Output / notes |
-| ---- | ----------- | -------------- |
-| 1 | `quarto render code/thesis/01_generation_and_baselines/baseline_and_mr_generation_v02.qmd` | Baseline + MR-level CSVs in `code/data/synthetic/mr_levels_v02/` |
-| 2 | `quarto render code/thesis/01_generation_and_baselines/rem_parameter_recovery_v01.qmd` | **Gate:** validates REM recovery on the 0% baseline before MR experiments |
-| 3 | `quarto render code/thesis/01_generation_and_baselines/rhem_eventnet_prep_v01.qmd` (Sections 1–5) | eventnet input CSVs in `code/data/synthetic/eventnet_exports/` |
-| 4 | Run eventnet on each export (Section 6 of the notebook, or reuse files already in `code/data/synthetic/eventnet_gui_statistics/`) | Design-matrix CSVs per MR level |
-| 5 | Re-render `rhem_eventnet_prep_v01.qmd` (Section 7 runs when design matrices exist) | `code/data/synthetic/eventnet_gui_statistics/rhem_coefficient_summary.csv` |
-| 6 | `quarto render code/thesis/02_transformations_and_estimation/noise_reshuffle_rem_v02.qmd` | REM-on-transformed-data estimates in `code/data/synthetic/rem_noise_estimates/` (~40 s; refits all MR × replicate cells every render) |
-
-### Path B -- cross-dataset headline result (thesis deliverable)
-
-Used for the dataset-averaged threshold finding (28 baseline seeds, Decision 25). **This is the primary result for the thesis write-up.**
-
-| Step | What to run | Output / notes |
-| ---- | ----------- | -------------- |
-| 1 | `Rscript code/thesis/01_generation_and_baselines/cross_dataset_eventnet_batch_v01.R` | **~22 min.** Writes `code/data/synthetic/cross_dataset/{rem,rhem}_coefs_by_seed.csv`. Optional smoke test: `--n-seeds=2`. eventnet runs headless (no GUI). |
-| 2 | `quarto render code/thesis/01_generation_and_baselines/cross_dataset_averaging_v01.qmd` | Aggregation, threshold, recommendation sentence; writes `cross_dataset_summary_v01.csv` (~seconds) |
-| 3 | From `code/thesis/03_evaluation_and_reporting/`: `Rscript _briefing_figures.R` | PNG figures for the Meeting 11 briefing (must be run from that folder) |
-
-Path B is self-contained: the batch script generates baselines, MR-injects, fits REM and RHEM per (seed × MR level), and does not depend on Path A.
-
-### Reporting (optional)
-
-| File | Command |
-| ---- | ------- |
-| `code/thesis/03_evaluation_and_reporting/meeting11_briefing_v01.md` | `quarto render code/thesis/03_evaluation_and_reporting/meeting11_briefing_v01.md` |
-| `THESIS_TRACKER.md` | `quarto render THESIS_TRACKER.md` |
-
-### Key data locations
-
-```
-code/data/synthetic/
-  mr_levels_v02/                    # Path A: MR-level long tables
-  eventnet_exports/                 # Path A: eventnet inputs
-  eventnet_gui_statistics/          # Path A: eventnet design matrices + RHEM summary
-  rem_noise_estimates/              # Path A: REM noise/reshuffle fits
-  cross_dataset/                    # Path B: per-seed coefficients + averaged summary
-```
-
-See `code/README.md` for folder numbering conventions and file naming rules.
+Code is released for academic transparency and reproducibility. Please cite the thesis if you use it.
