@@ -1,0 +1,21 @@
+# Quarto-generated vendored web assets (Bootstrap, clipboard.js, etc.)
+# These are auto-recreated on `quarto render`; the source .qmd is the work.
+*_files/libs/
+
+# Quarto-rendered HTML reports (build artifacts; regenerate from .qmd)
+code/**/*.html
+
+# Quarto build/cache artifacts
+/.quarto/
+*_cache/
+.Rproj.user/
+
+# R session artifacts
+.Rhistory
+.RData
+.Rapp.history
+.Ruserdata
+
+# OS noise
+.DS_Store
+Thumbs.db
