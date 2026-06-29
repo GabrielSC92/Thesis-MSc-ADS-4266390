@@ -26,6 +26,7 @@ The study is **simulation-first and uses synthetic data exclusively** (no empiri
 
 ```
 thesis/                           # Thesis paper (DOCX + PDF)
+poster/                           # Defense poster (PPTX + PDF)
 code/
   01_generation_and_baselines/      # Synthetic generation + native benchmark workflows
   02_transformations_and_estimation/ # Dyadic transformation and REM estimation workflows
@@ -73,7 +74,7 @@ A single canonical seed (`20260423`) reproduces the REM-vs-RHEM comparison on on
 
 - **Code** (everything under `code/`, excluding data and third-party tools):
   MIT License — see [LICENSE](LICENSE).
-- **Thesis manuscript** (`thesis/`): licensed under
+- **Thesis manuscript** (`thesis/`) and **defense poster** (`poster/`): licensed under
   [CC-BY-NC-ND-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/),
   matching the Utrecht University Student Theses Repository deposit.
 - **Documentation** (this README and other project notes): licensed under
